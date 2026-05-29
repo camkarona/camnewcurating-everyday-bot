@@ -216,8 +216,8 @@ Gemini → 기사 초안 자동 생성
 | 3. 로컬 환경 | Python 3.14.5 + 패키지 설치 | ✅ 완료 |
 | 4. 로컬 테스트 | 수집→요약→텔레그램 전송 정상 | ✅ 완료 |
 | 5. 깃허브 | 비공개 저장소 업로드 (.env 제외) | ✅ 완료 |
-| 6. 서버 배포 | Lightsail에 clone + .env + 설치 + 실행 | ⏭️ 다음 |
-| 7. 자동화 | cron 매일 같은 시간 전송 | ⏭️ 다음 |
+| 6. 서버 배포 | Lightsail에 clone + .env + 설치 + 실행 성공 | ✅ 완료 |
+| 7. 자동화 | cron 매일 캄보디아 11시 전송 등록 | ✅ 완료 |
 | 8. MVP 2 | 버튼 → 기사 초안 → 채널 발행 | 🔮 추후 |
 
 ### ✅ 완료된 것
@@ -225,8 +225,11 @@ Gemini → 기사 초안 자동 생성
 - **코드 작성 완료**: `camnewcurating_everyday_bot.py` (올인원 단일 파일)
 - **로컬 PC 환경 구축**: Python 3.14.5 설치, 패키지 4종 설치 완료
 - **로컬 실행 테스트**: RSS 수집 ✅ / Gemini 요약 ✅ / 텔레그램 전송 ✅ (chat_id 확보 후 정상)
-- **깃허브 업로드 완료**: 비공개 저장소 https://github.com/camkarona/camnewcurating-everyday-bot
-  (`.gitignore`로 `.env` 등 민감정보 제외 확인 완료)
+- **깃허브 업로드 완료**: https://github.com/camkarona/camnewcurating-everyday-bot
+  (`.gitignore`로 `.env` 등 민감정보 제외 확인 완료. 서버 배포 편의를 위해 public으로 전환 — 코드에 비밀정보 없음)
+- **서버 배포 완료**: Lightsail(싱가포르, UTC)에 git clone → venv 생성 → 패키지 설치 → `.env` 작성 → 실행 성공 (단톡방 수신 확인)
+- **자동화 완료**: cron 등록 `0 4 * * *` (서버 UTC 04시 = 캄보디아 11시), 로그는 `bot.log`
+- **전송 대상**: 텔레그램 단톡방(나+편집장+봇), group chat_id 사용 → 그룹 멤버 전원 수신
 
 ### 📂 실제 파일 구성 (설계 6장과 달라진 점)
 
@@ -257,22 +260,23 @@ Gemini → 기사 초안 자동 생성
 | 꼭지 수 | 소스별 5개 | **현지 7꼭지 / 한국 3꼭지** |
 | 현지 선별 | 최신순 | 후보 12개 수집 → **Gemini 중요도순 상위 7** |
 | 시간 필터 | 24시간 이내 | **최근 24시간 이내** (작성 시각 기준) 유지 |
+| 표시 시각 | 미지정 | **캄보디아 시간(ICT, UTC+7)** |
+| 실행 시각 | 오전 11시 | **캄보디아 11시** = cron `0 4 * * *` (서버 UTC) |
+| 저장소 공개 | 미지정 | **public** (배포 편의, 비밀정보 없음) |
+
+### 🔁 운영 메모 (앞으로)
+
+- **모니터링**: 매일 캄보디아 11시 단톡방 확인. 문제 시 서버에서 `cat bot.log` 또는 `tail -n 30 bot.log`로 실행 로그 점검
+- **코드 갱신 흐름**: 로컬에서 수정 → `git push` → 서버에서 `cd ~/camnewcurating-everyday-bot && git pull` (public이라 토큰 불필요)
+- **수동 실행(테스트)**: 서버에서 `cd ~/camnewcurating-everyday-bot && venv/bin/python camnewcurating_everyday_bot.py`
+- **설정값 변경(chat_id 등)**: 서버에서 `nano .env` 직접 수정 (`.env`는 깃에 없음)
+- **서버 재부팅 필요 안내**가 떠 있었음(`System restart required`) → 한가할 때 한 번 재부팅 권장. cron은 재부팅해도 유지됨
 
 ### ⏭️ 남은 일 (To-Do)
 
-1. **[배포] AWS Lightsail 서버에 올리기** ← 다음 작업
-   - 서버 접속 (Lightsail 웹 터미널 추천)
-   - 서버 Python 버전 확인 (`python3 --version`)
-   - 깃허브에서 코드 받기: `git clone https://github.com/camkarona/camnewcurating-everyday-bot`
-   - ⚠️ `.env`는 깃에 없으므로 **서버에서 직접 생성**해 키 3개 입력 (`nano .env`)
-   - `pip install -r requirements.txt`
-   - 서버에서 수동 1회 실행 테스트 (`python3 camnewcurating_everyday_bot.py`)
-2. **[루틴화] cron 등록 — 매일 같은 시간 자동 전송**
-   - `crontab -e`에 스케줄 등록 (서버 UTC ↔ KST 11시 = `0 2 * * *`)
-   - 실행 로그 파일로 남기기 (`>> bot.log 2>&1`)
-   - 며칠간 정상 동작 모니터링
-3. **(코드 갱신 시) 서버 반영** — 로컬에서 수정 → `git push` → 서버에서 `git pull`
-4. **(추후) MVP 2** — 버튼 인터랙션 → 기사 초안 생성 → 채널 발행
+1. **(선택) 한국 언론 소스 정확도 개선** — 현재 한국어 검색에 베트남/연예 기사가 간혹 섞임. 신뢰 매체 필터 추가 가능
+2. **(선택) 비공개로 되돌리기** — 원하면 SSH 배포키 설정 후 repo를 다시 private 전환 가능
+3. **(추후) MVP 2** — 버튼 인터랙션 → 기사 초안 생성 → 채널 발행
 
 ---
 

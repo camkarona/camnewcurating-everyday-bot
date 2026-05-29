@@ -1,0 +1,20 @@
+# 🔐 실제 키가 든 환경변수 파일 (절대 커밋 금지!)
+.env
+
+# 파이썬 캐시/빌드 산출물
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# 로그
+*.log
+
+# OS 부산물
+.DS_Store
+Thumbs.db
+
+# Claude Code 로컬 설정 (이 PC 전용)
+.claude/

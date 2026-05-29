@@ -212,6 +212,8 @@ Gemini → 기사 초안 자동 생성
 - **코드 작성 완료**: `camnewcurating_everyday_bot.py` (올인원 단일 파일)
 - **로컬 PC 환경 구축**: Python 3.14.5 설치, 패키지 4종 설치 완료
 - **로컬 실행 테스트**: RSS 수집 ✅ / Gemini 요약 ✅ / 텔레그램 전송 ✅ (chat_id 확보 후 정상)
+- **깃허브 업로드 완료**: 비공개 저장소 https://github.com/camkarona/camnewcurating-everyday-bot
+  (`.gitignore`로 `.env` 등 민감정보 제외 확인 완료)
 
 ### 📂 실제 파일 구성 (설계 6장과 달라진 점)
 
@@ -245,16 +247,19 @@ Gemini → 기사 초안 자동 생성
 
 ### ⏭️ 남은 일 (To-Do)
 
-1. **[배포] AWS Lightsail 서버에 올리기**
+1. **[배포] AWS Lightsail 서버에 올리기** ← 다음 작업
+   - 서버 접속 (Lightsail 웹 터미널 추천)
    - 서버 Python 버전 확인 (`python3 --version`)
-   - 코드 + `.env` + `requirements.txt` 업로드 (예: `/home/ubuntu/news_bot/`)
-   - 서버에서 `pip install -r requirements.txt`
-   - 서버에서 수동 1회 실행 테스트
+   - 깃허브에서 코드 받기: `git clone https://github.com/camkarona/camnewcurating-everyday-bot`
+   - ⚠️ `.env`는 깃에 없으므로 **서버에서 직접 생성**해 키 3개 입력 (`nano .env`)
+   - `pip install -r requirements.txt`
+   - 서버에서 수동 1회 실행 테스트 (`python3 camnewcurating_everyday_bot.py`)
 2. **[루틴화] cron 등록 — 매일 같은 시간 자동 전송**
-   - `crontab -e`에 스케줄 등록 (서버 시간대 ↔ KST 11시 환산 주의)
+   - `crontab -e`에 스케줄 등록 (서버 UTC ↔ KST 11시 = `0 2 * * *`)
    - 실행 로그 파일로 남기기 (`>> bot.log 2>&1`)
    - 며칠간 정상 동작 모니터링
-3. **(추후) MVP 2** — 버튼 인터랙션 → 기사 초안 생성 → 채널 발행
+3. **(코드 갱신 시) 서버 반영** — 로컬에서 수정 → `git push` → 서버에서 `git pull`
+4. **(추후) MVP 2** — 버튼 인터랙션 → 기사 초안 생성 → 채널 발행
 
 ---
 

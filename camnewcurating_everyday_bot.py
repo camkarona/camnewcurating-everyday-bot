@@ -51,8 +51,8 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3-flash-preview").strip()
 
-# 한국 시간대 (KST)
-KST = timezone(timedelta(hours=9))
+# 표시용 시간대 - 캄보디아 시간 (ICT, UTC+7). 캄보디아는 서머타임 없음.
+LOCAL_TZ = timezone(timedelta(hours=7))
 
 
 # ─────────────────────────────────────────────────────────────
@@ -325,8 +325,8 @@ def _escape(text):
 
 
 def _now_strings():
-    now_kst = datetime.now(KST)
-    return now_kst.strftime("%m.%d"), now_kst.strftime("%H:%M")
+    now_local = datetime.now(LOCAL_TZ)
+    return now_local.strftime("%m.%d"), now_local.strftime("%H:%M")
 
 
 def build_local_message(articles):

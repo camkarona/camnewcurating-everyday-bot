@@ -350,7 +350,7 @@ def build_local_message(articles):
         lines.append("")
 
     lines.append("━━━━━━━━━━━━━━━")
-    lines.append(f"총 {len(articles)}건 · 🤖 까로나 뉴스봇 v1")
+    lines.append(f"총 {len(articles)}건 · 🤖 까로나 뉴스봇 v1.1")
     return "\n".join(lines)
 
 
@@ -372,7 +372,7 @@ def build_korea_message(articles):
         lines.append("")
 
     lines.append("━━━━━━━━━━━━━━━")
-    lines.append(f"총 {len(articles)}건 · 🤖 까로나 뉴스봇 v1")
+    lines.append(f"총 {len(articles)}건 · 🤖 까로나 뉴스봇 v1.1")
     return "\n".join(lines)
 
 

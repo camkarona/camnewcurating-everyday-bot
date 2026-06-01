@@ -317,6 +317,81 @@ def select_local(articles):
 
 
 # ─────────────────────────────────────────────────────────────
+# 3-b. (v1.2) 현지 영문 심층 요약 - Gemini Google 검색 그라운딩
+# ─────────────────────────────────────────────────────────────
+DEEP_SUMMARY_PROMPT = """\
+당신은 캄보디아 뉴스를 한국 교민/투자자에게 브리핑하는 편집 보조 AI입니다.
+아래 영문 기사 1건에 대해, Google 검색으로 실제 기사 내용을 확인한 뒤 한국어로 작성하세요.
+
+기사 제목: {title}
+출처: {source}
+
+작성 규칙:
+- 검색으로 기사 내용을 확인할 수 없으면 제목만으로 추측하지 말고, 요약 자리에 "(원문 확인 필요)"라고만 쓰세요.
+- 사실에 근거해서만 작성하고, 모르는 내용을 지어내지 마세요.
+- 반드시 한국어로 작성하세요.
+
+아래 형식 그대로 출력하세요 (다른 말, 머리말, 마크다운 금지):
+요약: <기사 핵심을 한국어 2~3문장으로>
+의미: <한국 교민/투자자/편집장에게 주는 함의 한 문장>
+"""
+
+
+def deep_summarize_local(articles):
+    """(v1.2) 선별된 현지 영문 기사에 검색 기반 한국어 요약/의미를 채운다.
+
+    Gemini Google 검색 그라운딩으로 기사별 1회 호출.
+    실패 시 enrich_local()에서 만든 기존 코멘트로 폴백한다.
+    """
+    if not articles:
+        return articles
+
+    client = genai.Client(api_key=GEMINI_API_KEY)
+
+    for a in articles:
+        summary, insight = "", ""
+        prompt = DEEP_SUMMARY_PROMPT.format(
+            title=a["title"],
+            source=a.get("source") or "(미상)",
+        )
+        try:
+            resp = client.models.generate_content(
+                model=GEMINI_MODEL,
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    tools=[types.Tool(google_search=types.GoogleSearch())],
+                    temperature=0.3,
+                ),
+            )
+            summary, insight = _parse_summary_insight((resp.text or "").strip())
+            log.info("심층 요약 완료: %s", a["title"][:40])
+        except Exception as e:  # noqa: BLE001
+            log.warning("심층 요약 실패(폴백 사용) [%s...]: %s", a["title"][:30], e)
+
+        # 폴백: 요약 실패 시 배치 단계의 코멘트를 요약 자리에 사용
+        a["summary"] = summary or a.get("comment") or ""
+        a["insight"] = insight
+        time.sleep(0.5)  # 호출 간 약간의 간격
+
+    return articles
+
+
+def _parse_summary_insight(text):
+    """'요약: ... / 의미: ...' 형식 텍스트를 (summary, insight)로 분리."""
+    if not text:
+        return "", ""
+    summary, insight = text, ""
+    if "의미:" in text:
+        before, after = text.split("의미:", 1)
+        summary = before
+        insight = after.strip().splitlines()[0].strip() if after.strip() else ""
+    # '요약:' 라벨 제거 + 공백/줄바꿈 정리(2~3문장 한 단락으로)
+    summary = " ".join(summary.replace("요약:", "").split())
+    insight = " ".join(insight.split())
+    return summary, insight
+
+
+# ─────────────────────────────────────────────────────────────
 # 4. 텔레그램 메시지 포맷
 # ─────────────────────────────────────────────────────────────
 def _escape(text):
@@ -330,7 +405,7 @@ def _now_strings():
 
 
 def build_local_message(articles):
-    """메시지 1 - 캄보디아 현지 (영문). 원문 제목 + 한국어 코멘트 + 출처."""
+    """메시지 1 - 캄보디아 현지 (영문). 원문 제목 + 한국어 요약 + 교민 의미 + 출처. (v1.2)"""
     date_str, time_str = _now_strings()
     lines = [
         f"🇰🇭 <b>캄보디아 현지 뉴스 (영문)</b> ({date_str} / {time_str})",
@@ -340,8 +415,12 @@ def build_local_message(articles):
     for n, a in enumerate(articles, start=1):
         emoji = IMPORTANCE_EMOJI.get(a.get("importance", "중"), "▪️")
         lines.append(f"{emoji} [{n}] {_escape(a['title'])}")
-        if a.get("comment"):
-            lines.append(f"   → {_escape(a['comment'])}")
+        # 심층 요약(v1.2). 없으면 기존 코멘트로 폴백.
+        summary = a.get("summary") or a.get("comment") or ""
+        if summary:
+            lines.append(f"   {_escape(summary)}")
+        if a.get("insight"):
+            lines.append(f"   💡 {_escape(a['insight'])}")
         meta = []
         if a.get("source"):
             meta.append(f"📰 {_escape(a['source'])}")
@@ -350,7 +429,7 @@ def build_local_message(articles):
         lines.append("")
 
     lines.append("━━━━━━━━━━━━━━━")
-    lines.append(f"총 {len(articles)}건 · 🤖 까로나 뉴스봇 v1.1")
+    lines.append(f"총 {len(articles)}건 · 🤖 까로나 뉴스봇 v1.2-beta")
     return "\n".join(lines)
 
 
@@ -372,7 +451,7 @@ def build_korea_message(articles):
         lines.append("")
 
     lines.append("━━━━━━━━━━━━━━━")
-    lines.append(f"총 {len(articles)}건 · 🤖 까로나 뉴스봇 v1.1")
+    lines.append(f"총 {len(articles)}건 · 🤖 까로나 뉴스봇 v1.2-beta")
     return "\n".join(lines)
 
 
@@ -456,10 +535,11 @@ def main():
 
     sent_ok = True
 
-    # 2) 메시지 1 - 현지 영문 (Gemini 코멘트 + 중요도 선별)
+    # 2) 메시지 1 - 현지 영문 (중요도 선별 → v1.2 검색 기반 심층 요약)
     if local:
-        local = enrich_local(local)
-        local = select_local(local)
+        local = enrich_local(local)          # 배치: 중요도 + 폴백용 코멘트
+        local = select_local(local)          # 중요도순 상위 7개 선별
+        local = deep_summarize_local(local)  # v1.2: 검색 그라운딩 심층 요약
         msg1 = build_local_message(local)
         log.info("메시지 1 (현지 영문 %d건) 전송", len(local))
         sent_ok &= send_telegram(msg1)

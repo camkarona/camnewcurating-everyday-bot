@@ -30,6 +30,7 @@ import sys
 import json
 import time
 import logging
+import argparse
 from datetime import datetime, timezone, timedelta
 
 import feedparser
@@ -151,16 +152,18 @@ def _sort_recent(articles):
     )
 
 
-def collect_articles():
+def collect_articles(recent_hours=RECENT_HOURS):
     """RSS 소스를 돌며 그룹별 기사를 수집한다.
 
+    recent_hours: 최근 N시간 이내 기사만 수집 (오전=24, 오후=12)
+
     반환: (local_articles, korea_articles)
-      - 24시간 이내, 제목 기준 전역 중복 제거
+      - 최근 recent_hours 이내, 제목 기준 전역 중복 제거
       - 현지(local_en): 최신 LOCAL_POOL개까지 모음 (이후 중요도로 7개 선별)
       - 한국(korea_ko): 최신 KOREA_COUNT개
     """
     now = datetime.now(timezone.utc)
-    cutoff = now - timedelta(hours=RECENT_HOURS)
+    cutoff = now - timedelta(hours=recent_hours)
 
     seen_titles = set()
     buckets = {"local_en": [], "korea_ko": []}
@@ -320,28 +323,26 @@ def select_local(articles):
 # 3-b. (v1.2) 현지 영문 심층 요약 - Gemini Google 검색 그라운딩
 # ─────────────────────────────────────────────────────────────
 DEEP_SUMMARY_PROMPT = """\
-당신은 캄보디아 뉴스를 한국 교민/투자자에게 브리핑하는 편집 보조 AI입니다.
-아래 영문 기사 1건에 대해, Google 검색으로 실제 기사 내용을 확인한 뒤 한국어로 작성하세요.
+당신은 캄보디아 뉴스를 한국 독자에게 전달하는 편집 보조 AI입니다.
+아래 영문 기사 1건에 대해, Google 검색으로 실제 기사 내용을 확인한 뒤 한국어로 요약하세요.
 
 기사 제목: {title}
 출처: {source}
 
 작성 규칙:
-- 검색으로 기사 내용을 확인할 수 없으면 제목만으로 추측하지 말고, 요약 자리에 "(원문 확인 필요)"라고만 쓰세요.
+- 기사 핵심을 한국어 2~3문장으로 요약하세요.
+- 검색으로 기사 내용을 확인할 수 없으면 제목만으로 추측하지 말고 "(원문 확인 필요)"라고만 쓰세요.
 - 사실에 근거해서만 작성하고, 모르는 내용을 지어내지 마세요.
-- 반드시 한국어로 작성하세요.
-
-아래 형식 그대로 출력하세요 (다른 말, 머리말, 마크다운 금지):
-요약: <기사 핵심을 한국어 2~3문장으로>
-의미: <한국 교민/투자자/편집장에게 주는 함의 한 문장>
+- 머리말·라벨·마크다운 없이, 요약 문장만 한국어로 출력하세요.
 """
 
 
 def deep_summarize_local(articles):
-    """(v1.2) 선별된 현지 영문 기사에 검색 기반 한국어 요약/의미를 채운다.
+    """(v1.3) 선별된 현지 영문 기사에 검색 기반 한국어 요약을 채운다.
 
     Gemini Google 검색 그라운딩으로 기사별 1회 호출.
     실패 시 enrich_local()에서 만든 기존 코멘트로 폴백한다.
+    (v1.3: 교민 의미/인사이트 항목 제거 — 제목 + 한국어 요약만)
     """
     if not articles:
         return articles
@@ -349,7 +350,7 @@ def deep_summarize_local(articles):
     client = genai.Client(api_key=GEMINI_API_KEY)
 
     for a in articles:
-        summary, insight = "", ""
+        summary = ""
         prompt = DEEP_SUMMARY_PROMPT.format(
             title=a["title"],
             source=a.get("source") or "(미상)",
@@ -363,32 +364,15 @@ def deep_summarize_local(articles):
                     temperature=0.3,
                 ),
             )
-            summary, insight = _parse_summary_insight((resp.text or "").strip())
+            summary = " ".join((resp.text or "").split())  # 공백/줄바꿈 정리
             log.info("심층 요약 완료: %s", a["title"][:40])
         except Exception as e:  # noqa: BLE001
             log.warning("심층 요약 실패(폴백 사용) [%s...]: %s", a["title"][:30], e)
 
         # 폴백: 요약 실패 시 배치 단계의 코멘트를 요약 자리에 사용
         a["summary"] = summary or a.get("comment") or ""
-        a["insight"] = insight
-        time.sleep(0.5)  # 호출 간 약간의 간격
 
     return articles
-
-
-def _parse_summary_insight(text):
-    """'요약: ... / 의미: ...' 형식 텍스트를 (summary, insight)로 분리."""
-    if not text:
-        return "", ""
-    summary, insight = text, ""
-    if "의미:" in text:
-        before, after = text.split("의미:", 1)
-        summary = before
-        insight = after.strip().splitlines()[0].strip() if after.strip() else ""
-    # '요약:' 라벨 제거 + 공백/줄바꿈 정리(2~3문장 한 단락으로)
-    summary = " ".join(summary.replace("요약:", "").split())
-    insight = " ".join(insight.split())
-    return summary, insight
 
 
 # ─────────────────────────────────────────────────────────────
@@ -404,23 +388,21 @@ def _now_strings():
     return now_local.strftime("%m.%d"), now_local.strftime("%H:%M")
 
 
-def build_local_message(articles):
-    """메시지 1 - 캄보디아 현지 (영문). 원문 제목 + 한국어 요약 + 교민 의미 + 출처. (v1.2)"""
+def build_local_message(articles, window_hours=RECENT_HOURS):
+    """메시지 1 - 캄보디아 현지 (영문). 원문 제목 + 한국어 요약 + 출처. (v1.3)"""
     date_str, time_str = _now_strings()
     lines = [
-        f"🇰🇭 <b>캄보디아 현지 뉴스 (영문)</b> ({date_str} / {time_str})",
+        f"🇰🇭 <b>캄보디아 현지 뉴스 (영문)</b> ({date_str} / {time_str} · 지난 {window_hours}시간)",
         "━━━━━━━━━━━━━━━",
         "",
     ]
     for n, a in enumerate(articles, start=1):
         emoji = IMPORTANCE_EMOJI.get(a.get("importance", "중"), "▪️")
         lines.append(f"{emoji} [{n}] {_escape(a['title'])}")
-        # 심층 요약(v1.2). 없으면 기존 코멘트로 폴백.
+        # 한국어 요약(검색 기반). 없으면 기존 코멘트로 폴백.
         summary = a.get("summary") or a.get("comment") or ""
         if summary:
             lines.append(f"   {_escape(summary)}")
-        if a.get("insight"):
-            lines.append(f"   💡 {_escape(a['insight'])}")
         meta = []
         if a.get("source"):
             meta.append(f"📰 {_escape(a['source'])}")
@@ -429,15 +411,15 @@ def build_local_message(articles):
         lines.append("")
 
     lines.append("━━━━━━━━━━━━━━━")
-    lines.append(f"총 {len(articles)}건 · 🤖 까로나 뉴스봇 v1.2")
+    lines.append(f"총 {len(articles)}건 · 🤖 까로나 뉴스봇 v1.3")
     return "\n".join(lines)
 
 
-def build_korea_message(articles):
+def build_korea_message(articles, window_hours=RECENT_HOURS):
     """메시지 2 - 한국 언론 속 캄보디아. 제목 + 출처만 간단히."""
     date_str, time_str = _now_strings()
     lines = [
-        f"🇰🇷 <b>한국 언론 속 캄보디아</b> ({date_str} / {time_str})",
+        f"🇰🇷 <b>한국 언론 속 캄보디아</b> ({date_str} / {time_str} · 지난 {window_hours}시간)",
         "━━━━━━━━━━━━━━━",
         "",
     ]
@@ -451,7 +433,7 @@ def build_korea_message(articles):
         lines.append("")
 
     lines.append("━━━━━━━━━━━━━━━")
-    lines.append(f"총 {len(articles)}건 · 🤖 까로나 뉴스봇 v1.2")
+    lines.append(f"총 {len(articles)}건 · 🤖 까로나 뉴스봇 v1.3")
     return "\n".join(lines)
 
 
@@ -516,31 +498,42 @@ def check_env():
     return True
 
 
+def parse_args():
+    p = argparse.ArgumentParser(description="까로나 뉴스봇")
+    p.add_argument(
+        "--hours", type=int, default=RECENT_HOURS,
+        help="수집할 최근 시간 범위 (오전 발송=24, 오후 발송=12)",
+    )
+    return p.parse_args()
+
+
 def main():
-    log.info("===== 까로나 뉴스봇 시작 (model=%s) =====", GEMINI_MODEL)
+    args = parse_args()
+    hours = args.hours
+    log.info("===== 까로나 뉴스봇 시작 (model=%s, 윈도우=%d시간) =====", GEMINI_MODEL, hours)
 
     if not check_env():
         sys.exit(1)
 
-    # 1) 수집
-    local, korea = collect_articles()
+    # 1) 수집 (최근 hours 시간)
+    local, korea = collect_articles(recent_hours=hours)
 
     if not local and not korea:
         date_str, _ = _now_strings()
         send_telegram(
-            f"📰 캄보디아 뉴스 브리핑\n오늘({date_str})은 최근 24시간 내 새 기사가 없습니다."
+            f"📰 캄보디아 뉴스 브리핑\n오늘({date_str})은 최근 {hours}시간 내 새 기사가 없습니다."
         )
         log.info("수집된 기사 없음. 종료.")
         return
 
     sent_ok = True
 
-    # 2) 메시지 1 - 현지 영문 (중요도 선별 → v1.2 검색 기반 심층 요약)
+    # 2) 메시지 1 - 현지 영문 (중요도 선별 → v1.3 검색 기반 요약)
     if local:
         local = enrich_local(local)          # 배치: 중요도 + 폴백용 코멘트
         local = select_local(local)          # 중요도순 상위 7개 선별
-        local = deep_summarize_local(local)  # v1.2: 검색 그라운딩 심층 요약
-        msg1 = build_local_message(local)
+        local = deep_summarize_local(local)  # v1.3: 검색 그라운딩 한국어 요약
+        msg1 = build_local_message(local, window_hours=hours)
         log.info("메시지 1 (현지 영문 %d건) 전송", len(local))
         sent_ok &= send_telegram(msg1)
         time.sleep(1)  # 메시지 간 간격
@@ -549,7 +542,7 @@ def main():
 
     # 3) 메시지 2 - 한국 언론 (제목 + 출처)
     if korea:
-        msg2 = build_korea_message(korea)
+        msg2 = build_korea_message(korea, window_hours=hours)
         log.info("메시지 2 (한국 언론 %d건) 전송", len(korea))
         sent_ok &= send_telegram(msg2)
     else:

@@ -85,8 +85,9 @@ LOCAL_COUNT = 7        # 현지 영문 꼭지 수
 KOREA_COUNT = 3        # 한국 언론 꼭지 수
 LOCAL_POOL = 12        # 현지: 중요도 선별을 위해 일단 더 모으는 풀 크기
 
-RECENT_HOURS = 24      # 최근 N시간 이내만
-REQUEST_TIMEOUT = 20   # HTTP 타임아웃(초)
+RECENT_HOURS = 24          # 최근 N시간 이내만
+REQUEST_TIMEOUT = 20       # HTTP 타임아웃(초)
+TELEGRAM_MAX_RETRIES = 3   # 전송 일시 실패 시 재시도 횟수
 
 # 중요도 표시 이모지 (현지 영문용)
 IMPORTANCE_EMOJI = {"상": "⭐", "중": "▪️", "하": "▫️"}
@@ -441,30 +442,55 @@ def build_korea_message(articles, window_hours=RECENT_HOURS):
 # 5. 텔레그램 전송 (Bot HTTP API 직접 호출)
 # ─────────────────────────────────────────────────────────────
 def send_telegram(text):
-    """텔레그램 sendMessage API 호출. 4096자 초과 시 분할 전송."""
+    """텔레그램 sendMessage API 호출. 4096자 초과 시 분할 전송.
+
+    각 청크는 일시 오류(네트워크 끊김, 429, 5xx) 시 자동 재시도한다.
+    """
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     chunks = _split_message(text, limit=3800)
 
     for i, chunk in enumerate(chunks, start=1):
-        payload = {
-            "chat_id": TELEGRAM_CHAT_ID,
-            "text": chunk,
-            "parse_mode": "HTML",
-            "disable_web_page_preview": True,
-        }
-        try:
-            r = requests.post(url, data=payload, timeout=REQUEST_TIMEOUT)
-            if r.status_code != 200:
-                log.error("텔레그램 전송 실패 (%d/%d): %s %s",
-                          i, len(chunks), r.status_code, r.text)
-                return False
-            log.info("텔레그램 전송 성공 (%d/%d)", i, len(chunks))
-        except requests.RequestException as e:
-            log.error("텔레그램 전송 예외: %s", e)
+        if not _send_chunk(url, chunk, i, len(chunks)):
             return False
         if len(chunks) > 1:
             time.sleep(1)
     return True
+
+
+def _send_chunk(url, chunk, idx, total):
+    """단일 청크 전송. 일시 오류는 TELEGRAM_MAX_RETRIES회까지 재시도한다.
+
+    - 네트워크 예외(RemoteDisconnected 등) / 429 / 5xx → 재시도
+    - 그 외 4xx (형식 오류 등 우리 잘못) → 즉시 실패 (재시도 무의미)
+    """
+    payload = {
+        "chat_id": TELEGRAM_CHAT_ID,
+        "text": chunk,
+        "parse_mode": "HTML",
+        "disable_web_page_preview": True,
+    }
+    for attempt in range(1, TELEGRAM_MAX_RETRIES + 1):
+        try:
+            r = requests.post(url, data=payload, timeout=REQUEST_TIMEOUT)
+            if r.status_code == 200:
+                log.info("텔레그램 전송 성공 (%d/%d)", idx, total)
+                return True
+            if r.status_code == 429 or r.status_code >= 500:
+                log.warning("텔레그램 일시 오류 %d (%d/%d, 시도 %d/%d): %s",
+                            r.status_code, idx, total, attempt,
+                            TELEGRAM_MAX_RETRIES, r.text[:200])
+            else:
+                # 400 등: 메시지 형식 문제 → 재시도해도 같은 결과
+                log.error("텔레그램 전송 거부 %d (%d/%d): %s",
+                          r.status_code, idx, total, r.text[:300])
+                return False
+        except requests.RequestException as e:
+            log.warning("텔레그램 전송 예외 (%d/%d, 시도 %d/%d): %s",
+                        idx, total, attempt, TELEGRAM_MAX_RETRIES, e)
+        if attempt < TELEGRAM_MAX_RETRIES:
+            time.sleep(2 * attempt)  # 2초 → 4초 백오프
+    log.error("텔레그램 전송 최종 실패 (%d/%d) — 재시도 소진", idx, total)
+    return False
 
 
 def _split_message(text, limit=3800):
